@@ -1,0 +1,38 @@
+# =======================
+# PYTHON (Desktop & DSP)
+# =======================
+# Cấu trúc môi trường ảo
+venv/
+env/
+.env
+
+# Code đã biên dịch và file đệm
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Các file âm thanh thu/phát tạm thời (tránh đẩy file rác âm thanh lên mạng)
+*.wav
+*.mp3
+
+# =======================
+# DART/FLUTTER (Mobile App)
+# =======================
+# Dù thư mục mobile_app đã có .gitignore riêng nhưng rào ở ngoài root cũng không thừa
+.dart_tool/
+build/
+.metadata
+.packages
+.pub-cache/
+.pub/
+*.symlinks
+
+# =======================
+# IDEs & OS Files
+# =======================
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
