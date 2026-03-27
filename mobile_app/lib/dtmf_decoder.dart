@@ -99,7 +99,7 @@ class DtmfDecoder {
     // IN LOG ĐỂ DEBUG VÀ TUNING (ĐIỀU CHỈNH) NGƯỠNG THRESHOLD
     // ----------------------------------------------------
     // Bật dòng print dưới đây để xem trực tiếp năng lượng nhận được từ Mic có đủ mạnh không
-    // print('Goertzel [ROW]: MaxFreq=$maxRowFreq, Energy=$maxRowEnergy | [COL]: MaxFreq=$maxColFreq, Energy=$maxColEnergy');
+    print('Goertzel [ROW]: MaxFreq=$maxRowFreq, Energy=$maxRowEnergy | [COL]: MaxFreq=$maxColFreq, Energy=$maxColEnergy');
 
     // Chốt sổ: Có phải là tạp âm im lặng (noise)? Hay đã vượt threshold đủ to để gáy?
     if (maxRowEnergy > threshold && maxColEnergy > threshold) {

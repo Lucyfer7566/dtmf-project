@@ -57,7 +57,12 @@ class _DtmfPageState extends State<DtmfPage> {
 
     try {
       final sampleRateCfg = 8000;
-      final floatSignal = DtmfEncoder.generateDtmfSignal(digits, sampleRate: sampleRateCfg);
+      final floatSignal = DtmfEncoder.generateDtmfSignal(
+        digits, 
+        sampleRate: sampleRateCfg,
+        toneDurationSec: 0.4,
+        silenceDurationSec: 0.2,
+      );
       
       if (floatSignal.isEmpty) return;
 
@@ -82,14 +87,14 @@ class _DtmfPageState extends State<DtmfPage> {
   Future<void> _recordAndDecodeTone() async {
     try {
       setState(() {
-        _statusMessage = 'Đang mở luồng Microphone thu âm 2s...';
+        _statusMessage = 'Đang mở luồng Microphone thu âm 5s...';
         _decodeResult = 'Đang lắng nghe...';
       });
 
       // 1. Khởi tạo ghi âm từ audio_input.dart (Lấy mảng PCM 16-bit)
       final pcm = await AudioInput.recordPcmSamples(
         sampleRate: 8000, 
-        duration: const Duration(seconds: 2)
+        duration: const Duration(seconds: 5)
       );
 
       if (pcm.isEmpty) {
@@ -99,13 +104,17 @@ class _DtmfPageState extends State<DtmfPage> {
 
       setState(() => _statusMessage = 'Đang chuẩn hóa biên độ mảng PCM...');
 
-      // 2. Chuyển List<int> PCM 16-bit sang List<double> chuẩn hóa [-1.0, 1.0]
+      // 2. Chuyển List<int> PCM 16-bit sang List<double> chuẩn hóa [-1.0..1.0]
+      // Đã gỡ bỏ Auto-Gain vì mạch khuếch đại tự động sẽ hóa âm thanh quạt gió/im lặng 
+      // thành sóng 1.0 cực đại gây ra False Positives (lỗi nhảy số ngẫu nhiên).
+      // Việc chia đúng tỷ lệ thực 32768.0 kết hợp với threshold siêu thấp (100.0) là hoàn hảo nhất.
       final List<double> signal = pcm.map((val) => val / 32768.0).toList();
 
-      setState(() => _statusMessage = 'Đang đưa vào Goertzel để lọc mã DTMF...');
+      setState(() => _statusMessage = 'Đang đưa vào Goertzel để phát hiện mã DTMF...');
 
       // 3. Phép gọi thuật toán giải mã 
-      final digits = DtmfDecoder.decodeDtmfSignal(signal, sampleRate: 8000);
+      // Setup Threshold Threshold cực chuẩn: 100.0 (Bắt được sóng âm siêu bé từ Mic thực tế)
+      final digits = DtmfDecoder.decodeDtmfSignal(signal, sampleRate: 8000, energyThreshold: 100.0);
 
       setState(() {
         _statusMessage = 'Hoàn tất! Cấu trúc xử lý thành công gốc ${pcm.length} mẫu.';
@@ -172,7 +181,7 @@ class _DtmfPageState extends State<DtmfPage> {
             ElevatedButton.icon(
               onPressed: _recordAndDecodeTone,
               icon: const Icon(Icons.mic_rounded),
-              label: const Text('Quy Trình 2: Record (2s) & Decode'),
+              label: const Text('Quy Trình 2: Record (5s) & Decode'),
               style: ElevatedButton.styleFrom(
                 minimumSize: const Size.fromHeight(55),
                 backgroundColor: Colors.teal.shade100,
