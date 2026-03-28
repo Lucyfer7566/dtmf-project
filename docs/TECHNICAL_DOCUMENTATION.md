@@ -89,7 +89,7 @@ return rawStream.map((Uint8List data) {
 
 **Chuyện gì xảy ra?** Plugin Audio ghi luồng dạng `Uint8List` (Dạng Bit 0101 thô). Lõi hệ thống Dart cực kỳ khó tính và dễ bị Crash Alignment (Bộ nhớ cấp phát lệch). Hàm trên luồn lách qua lớp vỏ `ByteData`, bóc lẻ rứt từng cụm 2 Bytes Little-Endian cực nhỏ và lấp ráp chúng làm 1 Khối chuẩn (PCM_16-bits). Sự mượt mà của Cáp Mạng đều nhờ đây cả.
 
-### 2. Vùng Kẹp Chả Thời Gian Thực (`main.dart` -> `_processLiveBuffer()`)
+### 2. Vùng Kẹp Thời Gian Thực (`main.dart` -> `_processLiveBuffer()`)
 
 Ống truyền trả về `List<int>`, Flutter sẽ tự chia (Normalize) qua $32768.0$ để biến nó thành dải `-1.0 -> 1.0` siêu nhẹ và dồn vào `_audioBuffer`.
 
@@ -128,3 +128,48 @@ if (intensity < 0.20) continue;
 ```
 
 Nhờ Thuật toán tách Lõi Bù Trừ Kép này, Bất kể đưa tần số dtmf bé cỡ nào vào Micro, Mobile App luôn hiển thị Cột Vuông ON/OFF nguyên khối Vàng Đậm/Xanh Đậm (Solid Color) chuẩn xác theo tỷ lệ toán học, tạo thành một khung Ma trận DTMF.
+
+---
+
+## PHẦN 5: CÁCH ĐỌC BIỂU ĐỒ (VISUALIZATION GUIDE) VÀ VÍ DỤ THỰC TẾ
+
+Hệ thống biểu diễn tín hiệu giải mã thông qua hai loại biểu đồ trực quan chính:
+
+### 1. Biểu đồ Thời gian thực (Waveform) - _Chỉ hiển thị trên Desktop_
+
+- Hiển thị biên độ âm thanh (Amplitude) thô thu được từ Micro.
+- **Cách đọc:** Trục ngang là Thời gian, trục dọc là Biên độ dao động (từ `-1.0` đến `1.0`). Khi đo tín hiệu DTMF, đồ thị này sẽ hiển thị dưới dạng một dải cụm sóng liên tục, biên độ dày đặc và khá ổn định. Nếu hình dáng sóng nổ lởm chởm gai góc ngẫu nhiên thì đó có thể là âm thanh môi trường (tiếng nói, tiếng ồn).
+
+### 2. Biểu đồ Mật độ Phổ (Piano Roll / Heatmap) - _Lõi Hiển Thị Của Cả 2 Thiết Bị_
+
+Đây là "con mắt" của hệ thống dựa trên ma trận năng lượng Goertzel, cung cấp khả năng tự kiểm dịch (Manual validation) cho người dùng.
+
+- **Trục dọc (Y):** 8 tần số chuẩn của bảng mã DTMF, chia làm 2 vùng kiểm soát:
+  - **4 làn bên trên** là Nhóm Tần Số Cao `Col` (Tính bằng Hz): `1633`, `1477`, `1336`, `1209`.
+  - **4 làn bên dưới** là Nhóm Tần Số Thấp `Row` (Tính bằng Hz): `941`, `852`, `770`, `697`.
+- **Trục ngang (X):** Lưu lượng thời gian. Các lưới vuông sẽ tự động cuộn sang trái (mỗi ô vuông đại diện cho một mốc 100 mili-giây).
+- **Mã Hóa Màu Sắc:**
+  - Nếu bất kỳ Tần số **Cao** nào bắt được tín hiệu vượt mốc Threshold, nó sẽ khiến ô vuông tại làn đó hiện **Màu Xanh (Lime/LightGreen)**.
+  - Nếu Tần số **Thấp** bắt được tín hiệu, nó khiến ô vuông hiện **Màu Vàng (Amber)**.
+
+### PHÂN TÍCH VÍ DỤ THỰC TẾ
+
+**Ví dụ 1: Khi hệ thống thu được Phím `5`**
+Khi phát tiếng phím `5` vào thiết bị:
+
+1. Tại rãnh Radar Piano Roll sẽ thấy **CHÍNH XÁC 2 ô vuông Đơn Sắc sáng lên cùng lúc** tại một cột thời gian thẳng đứng:
+   - Một ô màu **Vàng** ở làn `770 Hz`.
+   - Một ô màu **Xanh** ở làn `1336 Hz`.
+2. Dao cắt thuật toán đối chiếu `770` (Hàng Số 2) và `1336` (Cột Số 2) vào bảng Ma trận DTMF Core. Giao điểm của chúng chính là Phím `5`.
+3. Nhờ cơ sở khoa học trên hình ảnh, hệ thống hiển thị mã `5` ra màn hình.
+
+**Ví dụ 2: Khi hệ thống thu được Phím `*`**
+
+- Hình ảnh Piano Roll ghi nhận 1 ô **Vàng ở làn đáy `941 Hz`** và 1 ô **Xanh ở làn `1209 Hz`**.
+- Chiếu theo giao điểm toạ độ toán học: Đây là nút `*`.
+
+**Ví dụ 3: Lỗi Tín Hiệu (Chống Nhiễu Noise)**
+
+- Nếu vô tình đưa một âm thanh tiếng ho vào điện thoại. Micro giật mạnh.
+- Nếu nhìn trên Waveform, sóng vọt lên đỉnh `1.0`. Nhưng trên Piano Roll, chỉ có duy nhất **1 ô sáng lên ở dải Vàng**, hoặc bảng quang phổ **hiện màu loang lổ xen kẽ**.
+- **Kết luận:** Âm thanh KHÔNG đủ một cặp điểm (1 Vàng + 1 Xanh). Thuật toán huỷ lệnh, báo cáo đây là Tạp Âm Rác và không in ký tự nào ra màn hình mã hoá.
