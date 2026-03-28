@@ -6,6 +6,7 @@ import 'dtmf_encoder.dart';
 import 'audio_input.dart';
 import 'dtmf_decoder.dart';
 import 'widgets/piano_roll_painter.dart';
+import 'package:flutter/services.dart';
 
 void main() {
   runApp(const DtmfApp());
@@ -73,6 +74,11 @@ class _DtmfPageState extends State<DtmfPage> {
     }
 
     try {
+      // Dừng Mic nếu đang bật để tránh đấu đá hai luồng tiếng
+      if (_isRecording) {
+        await _stopRecording();
+      }
+
       final sampleRateCfg = 8000;
       final floatSignal = DtmfEncoder.generateDtmfSignal(
         digits, 
@@ -82,6 +88,19 @@ class _DtmfPageState extends State<DtmfPage> {
       );
       
       if (floatSignal.isEmpty) return;
+
+      // BYPASS VÀ DRAW TRỰC TẾP TẠI CHỖ (Zero-loopback)
+      setState(() {
+        _decodeResult = '';
+        _pianoRollHistory.clear();
+        _audioBuffer.clear();
+        _chunkCounter = 0;
+        _lastChar = null;
+      });
+      
+      // Bơm cục sóng vừa sinh ra vào thẳng hệ tuần hoàn xử lý lõi
+      _audioBuffer.addAll(floatSignal);
+      _processLiveBuffer(); // Ép Goertzel cày xới và hiển thị Đồ hoạ ngay lập tức
 
       final pcmSignal = DtmfEncoder.floatToPcm16(floatSignal);
       final wavBytes = DtmfEncoder.createWavBytes(pcmSignal, sampleRateCfg);
@@ -224,6 +243,12 @@ class _DtmfPageState extends State<DtmfPage> {
                 prefixIcon: Icon(Icons.dialpad),
               ),
               keyboardType: TextInputType.text,
+              inputFormatters: [
+                FilteringTextInputFormatter.allow(RegExp(r'[0-9a-dA-D*#]')),
+                TextInputFormatter.withFunction((oldValue, newValue) {
+                  return newValue.copyWith(text: newValue.text.toUpperCase());
+                }),
+              ],
             ),
             
             const SizedBox(height: 20),

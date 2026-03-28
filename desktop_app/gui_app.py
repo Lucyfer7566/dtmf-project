@@ -52,7 +52,8 @@ class DTMFApp:
         frame_encode.grid(row=0, column=0, sticky="nsew", padx=(0, 5))
         
         tk.Label(frame_encode, text="Ký tự DTMF (0-9,*,#,A-D):").pack(pady=2)
-        self.entry_digits = tk.Entry(frame_encode, width=20, font=("Arial", 14), justify="center")
+        vcmd = (root.register(self.validate_dtmf_input), '%P')
+        self.entry_digits = tk.Entry(frame_encode, width=20, font=("Arial", 14), justify="center", validate="key", validatecommand=vcmd)
         self.entry_digits.insert(0, "A89")
         self.entry_digits.pack(pady=5)
         
@@ -206,6 +207,13 @@ class DTMFApp:
 
         self.fig.tight_layout(pad=3.0)
         self.canvas.draw()
+
+    def validate_dtmf_input(self, new_value):
+        import re
+        if new_value == "": 
+            return True
+        # Chỉ cho phép gõ các ký tự hợp lệ Phím DTMF (không phân biệt Hoa/Thường)
+        return bool(re.match(r'^[0-9a-dA-D*#]+$', new_value))
 
     def on_encode_play(self):
         digits = self.entry_digits.get().strip()
