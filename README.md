@@ -1,80 +1,130 @@
-# HỆ THỐNG PHÂN TÍCH & GIẢI MÃ TÍN HIỆU ĐA TẦN (DTMF SIGNAL ANALYZER)
+# TÀI LIỆU KỸ THUẬT: HỆ THỐNG PHÂN TÍCH & GIẢI MÃ TÍN HIỆU ĐA TẦN (DTMF)
 
-Dự án này là một bộ công cụ viễn thông chuyên nghiệp, hoạt động xuyên nền tảng (**Máy tính Python** và **Di động Flutter**) nhằm mục đích thu âm, theo dõi thời gian thực (Live Stream) và giải mã các tín hiệu **DTMF** (Dual-Tone Multi-Frequency) - âm thanh thường được tạo ra khi bấm phím trên điện thoại.
+## PHẦN 1: BẢN CHẤT CỦA TÍN HIỆU DTMF
 
----
+DTMF (Dual-Tone Multi-Frequency) là tín hiệu tạo ra từ bàn phím điện thoại. Mỗi phím bấm KHÔNG PHẢI là một âm thanh đơn lẻ, mà là sự hòa trộn của CHÍNH XÁC 2 sóng hình sin (1 sóng tần số Thấp + 1 sóng tần số Cao).
 
-## KẾT CẤU & KIẾN TRÚC HỆ THỐNG (ARCHITECTURE)
+- **Nhóm Thấp (Row Freqs):** `697 Hz`, `770 Hz`, `852 Hz`, `941 Hz`
+- **Nhóm Cao (Col Freqs):** `1209 Hz`, `1336 Hz`, `1477 Hz`, `1633 Hz`
 
-Hệ thống được thiết kế độc lập mặt giao diện nhưng **dùng chung một tư duy và thuật toán Lõi (Core DSP)**.
-
-### 1. Phân hệ Desktop (Python)
-
-- **Giao diện:** Xây dựng bằng `Tkinter` hỗ trợ Multi-threading (chạy ngầm không đơ màn hình).
-- **Âm thanh:** Dùng `sounddevice` (Luồng Queue siêu tốc) và `scipy/numpy` để lấy và đúc mẫu PCM.
-- **Biểu đồ:** Dùng `Matplotlib` vẽ các lưới Radar (Piano Roll) dưới dạng dải màu Heatmap (Magma) với tỷ lệ Tọa độ 2 chiều (Thời gian vs Tần số).
-
-### 2. Phân hệ Mobile (Flutter/Dart)
-
-- **Giao diện:** Bộ công cụ Cross-platform Dart. Tính mượt mà (60FPS) được đảm bảo bằng cơ chế `SingleChildScrollView` cuốn trục đồ hoạ liên tục.
-- **Âm thanh:** Giao thức luồng `Stream<Uint8List>` của Hardware Micro thông qua thư viện `record`.
-- **Biểu đồ:** Từ chối các bảng vẽ nặng nề. Áp dụng `CustomPainter` trực tiếp lên Canvas di động để họa những khối vuông Đơn Sắc (Solid blocks: Xanh / Vàng) hệt như một chiếc đàn Piano Tiles chạy ngược thời gian theo phương ngang dựa vào Năng lượng thực.
+Ví dụ: Khi bấm phím `1`, hệ thống loa điện thoại sẽ phát ra tiếng có tần số trộn lẫn của sóng **697 Hz** và sóng **1209 Hz**. Mục tiêu khi thực hiện dự án là bắt micro lắng nghe, bóc tách tổ hợp này và in chữ `1` lên màn hình.
 
 ---
 
-## LOGIC TOÁN HỌC: THUẬT TOÁN GOERTZEL
+## PHẦN 2: LÕI THUẬT TOÁN TOÁN HỌC GOERTZEL
 
-Nếu dùng FFT (Fast Fourier Transform), máy tính sẽ phải phân tách **TOÀN BỘ** bức màn tần số từ 0 -> 4000Hz. Rất tốn Vi xử lý (RAM/CPU) mà lại dư thừa.
+Nếu dùng FFT (Biến đổi Fourier Nhanh), máy phải quét qua 4000 mức tần số khác nhau. Để tránh lãng phí vi xử lý, dự án sử dụng **Cơ chế lọc IIR của Thuật toán Goertzel** - loại thuật toán chỉ dò đúng "điểm chọc" đã cài sẵn.
 
-Thay vào đó, hệ thống này dùng Thuật toán **Goertzel** - một loại "kính lúp" toán học. Nó chỉ chọc thủng phổ âm thanh tại **đúng 8 điểm tần số mục tiêu** của tín hiệu điện thoại, cắt gọt hoàn toàn tiếng gió, chó sủa, giọng nói con người (Noise rejection).
+### Công Thức Khởi Đầu
 
-### Bảng Ma Trận Tần Số Khóa (DTMF Matrix)
+Tại hàm `goertzel_mag` (Python) hoặc `energiesForFreqs` (Dart):
 
-| Low \ High | 1209 Hz | 1336 Hz | 1477 Hz | 1633 Hz |
-| :--------: | :-----: | :-----: | :-----: | :-----: |
-| **697 Hz** |    1    |    2    |    3    |    A    |
-| **770 Hz** |    4    |    5    |    6    |    B    |
-| **852 Hz** |    7    |    8    |    9    |    C    |
-| **941 Hz** |   \*    |    0    |    #    |    D    |
+1. **Hệ số Bậc (k):** Xác định Vị trí rổ của phổ: `k = int(0.5 + (N * target_freq) / sample_rate)`
+   - Với `N` là độ dài số mẫu (Ví dụ 800 mẫu âm thanh). `sample_rate` là 8000Hz.
+2. **Góc Xoay (omega):** $\omega = \frac{2\pi \cdot k}{N}$
+3. **Cos Coefficient:** $coeff = 2 \times \cos(\omega)$
 
-_Một phím hợp lệ CHỈ KHI Goertzel tìm thấy năng lượng bùng nổ đồng thời ở đúng 1 Hàng (Vàng) và 1 Cột (Xanh)._
+### Vòng Lặp Phản Hồi Hình Vô Tận (IIR Filter)
 
-### Cách tính Năng lượng (Goertzel Energy Formula)
+Thuật toán trỏ hai biến bộ nhớ `Q1 = 0`, `Q2 = 0`. Với hàng trăm mẫu mảng `$x_n$` đi vào:
 
-1. Tính Hệ số K: $k = (N \times TargetFrequency) / SampleRate$
-2. Tính hằng số W (Cosin): $\omega = (2 \times \pi \times k) / N$
-3. Dùng vòng lặp IIR Filter quét qua chuỗi âm thanh dài $N$ mẫu để ra $Q_1$, $Q_2$.
-4. **Năng lượng sóng (Magnitude Squared):** $Energy = Q_1^2 + Q_2^2 - (Q_1 \times Q_2 \times 2 \times \cos(\omega))$
-   Khi $Energy$ này bứt phá vượt mặt Ngưỡng cài đặt, phím máy tính sẽ được khắc (Decode).
+```python
+for n in range(N):
+    Q0 = coeff * Q1 - Q2 + x[n]
+    Q2 = Q1
+    Q1 = Q0
+```
 
----
+_Giai đoạn này là để tạo một dao động cộng hưởng (Resonance). Nếu sóng `x[n]` vô tình cùng tần số với $\omega$ của thuật toán, Q sẽ khuếch đại lên khổng lồ. Nếu khác tần số, dãy luân phiên cộng trừ sẽ tự triệt tiêu Q về 0._
 
-## LUỒNG HOẠT ĐỘNG (DATA FLOW)
+### Tính Năng lượng Vô Hướng Thực (Magnitude Squared)
 
-Hệ thống Cáp Quang thời gian thực chạy trên mạch nguyên lý 4 bước luân hồi:
-
-1. **[Thu Thập] - Bơm Dữ Liệu:**
-   Ống Mic mở ra luồng chảy `Stream` ở Tần số `8000Hz`. Máy sẽ liên tục múc từng khối **PCM 16-Bit** chèn lên bộ đệm âm thanh RAM (`_audioBuffer`).
-2. **[Cúp Khối] - Windowing:**
-   Không bao giờ phân tích đơn lẻ lẻ tẻ mảng Byte, hệ thống chờ khi bộ đệm đạt mốc **100ms (Frame Size = 800 mẫu âm)**. Tức thì cắt xoẹt cục 800 mẫu đó mang đi nướng ở lò Goertzel.
-3. **[Xét Nghiệm] - Decoding Threshold:**
-   Hàm Goertzel ném ra 8 con số cường độ Năng lượng cho 8 dải (4 High, 4 Low). Hệ thống lùng sục ra Mức Đỉnh lớn nhất của mảng High và Low. Nếu Đỉnh này lớn hơn mốc Rác cài sẵn (Threshold = 100.0) ➔ Xác định Toạ độ ➔ Suy ra Phím (Ví dụ `Max_Low_0` ghép với `Max_High_2` = Số `3`).
-4. **[Hiển Thị] - Auto-Gain Heatmap:**
-   Dựa trên tỷ lệ cường độ đó, `CustomPainter` sẽ bôi ánh sáng (Đèn ON/OFF). Các khối 100ms được móc xích vào mảng `History`, dàn hàng ngang và bọc trong khung Scroll trượt. Máy sẽ gồng sức tự động cuộn màn hình sang tận cùng biên giới bên Phải, tạo cảm giác Tín hiệu trôi giật thời gian thực.
+Sau khi vòng lặp nhai hết `N` mẫu:
+$$ Energy = Q_1^2 + Q_2^2 - Q_1 \times Q_2 \times coeff $$
+Sóng Năng Lượng này được áp vào điều kiện: Nếu `Energy > Threshold` thì đó chính là DTMF, không phải nhiễu.
 
 ---
 
-## CÁC HÀM XỬ LÝ QUAN TRỌNG NHẤT
+## PHẦN 3: LUỒNG HOẠT ĐỘNG TRÊN DESKTOP APP (PYTHON)
 
-### Trong Bản Desktop (Python):
+_Các file tham gia: `dsp/decoder.py`, `desktop_app/audio_io.py`, `desktop_app/gui_app.py`_
 
-- `dsp/decoder.py -> goertzel_mag()`: Khung xương toán học IIR Core, vòng lặp vi phân số Năng lượng sóng dội `energy`.
-- `audio_io.py -> LiveAudioHandler`: Thread bắt Audio bất tử của Sounddevice, gõ cộc cộc ném Block âm thanh rớt vào Queue Thread an toàn (Thread-Safe).
-- `gui_app.py -> _process_audio_queue()`: Hàm cập nhật Giao diện. Vắt mẫu từ Queue ra, giải mã ra phím Text, và Update màu mảng `extent` của Matplotlib để rạch dải sáng Vàng-Xanh (Piano Roll) lên khung giao diện tĩnh.
+**1. Khai Hỏa Microphone qua Queue (`audio_io.py`)**
 
-### Trong Bản Mobile (Flutter/Dart):
+```python
+sounddevice.InputStream(samplerate=self.rate, channels=self.channels, callback=self._callback)
+```
 
-- `audio_input.dart -> startRecordStream()`: Ngắt giới hạn thời gian cố định. Đổi đầu ra thành Ống `Stream`. Trong này có màng lọc giải phẫu Data C cấp thấp (`ByteData`), xử lý ép kiểu Unsigned 8-Bit sang vạch sóng Signed 16-Bit cực mượt chống kẹt Alignment Memory của HĐH điện thoại.
-- `main.dart -> _processLiveBuffer()`: Cục não điều phối của App. Ăn Mẫu `_audioBuffer` ở khối `800 frames / 100ms`, gọi hàm Decode và điều binh khiển tướng Cột năng lượng Ném vào mảng Cuộn Cuốn băng `_pianoRollHistory`.
-- `dtmf_decoder.dart -> energiesForFreqs()`: Hàm băm Toán Học Goertzel bằng ngôn ngữ Dart.
-- `piano_roll_painter.dart -> _paint()`: Hoạ sĩ Đồ Hoạ Thời gian Thực (`60FPS`). Tích hợp công nghệ lọc nhiễu **Dual Auto-Gain**. Lục tìm điểm sáng nhất ở 4 dải Low, đồng thời tìm điểm sáng nhất ở 4 dải High độc lập ➔ Trả lại khối Đồ hoạ Hình Chữ Nhật rực Rỡ 1 Màu Vuông Vắn (`AmberAccent` và `LightGreenAccent`) nếu Vượt Ngưỡng `20%`.
+Thay vì chờ đợi, nó mở một giếng nước. Cứ mỗi đoạn lấy mẫu âm thanh rớt xuống giếng, `_callback` sẽ ném mốc `indata.copy()` vào một giỏ `self.queue`. Giỏ này được Thread-Safe bảo vệ tuyệt đối.
+
+**2. Tiêu Hóa Dữ Liệu Ở Main GUI (`gui_app.py`)**
+Cứ mỗi 50ms, hàm `root.after(50, self._process_audio_queue)` chạy lại.
+
+- Nó cạy Mảng ra khỏi `self.audio_io.queue.get_nowait()`.
+- Ném nguyên cục đó sang `decode_dtmf_signal(buffer)`.
+- Nhận lại dãy Matrix cường độ để tấy rửa biểu đồ Matplotlib:
+
+```python
+self.energy_matrix[:, :-1] = self.energy_matrix[:, 1:] # Ép dồn tất cả cột sang trái
+self.energy_matrix[:, -1] = energy_col # Bổ sung cột mới vào rìa phải
+self.image_heat.set_data(self.energy_matrix) # Chớp thay đổi lên GUI.
+```
+
+---
+
+## PHẦN 4: LUỒNG HOẠT ĐỘNG TRÊN MOBILE APP (FLUTTER/DART)
+
+### 1. Phễu Lọc Thô Phần Cứng (`audio_input.dart`)
+
+```dart
+return rawStream.map((Uint8List data) {
+  var byteData = ByteData.sublistView(data);
+  List<int> pcm16Data = List.filled(byteData.lengthInBytes ~/ 2, 0);
+  for (int i = 0; i < byteData.lengthInBytes - 1; i += 2) {
+    pcm16Data[i ~/ 2] = byteData.getInt16(i, Endian.little);
+  }
+  return pcm16Data;
+});
+```
+
+**Chuyện gì xảy ra?** Plugin Audio ghi luồng dạng `Uint8List` (Dạng Bit 0101 thô). Lõi hệ thống Dart cực kỳ khó tính và dễ bị Crash Alignment (Bộ nhớ cấp phát lệch). Hàm trên luồn lách qua lớp vỏ `ByteData`, bóc lẻ rứt từng cụm 2 Bytes Little-Endian cực nhỏ và lấp ráp chúng làm 1 Khối chuẩn (PCM_16-bits). Sự mượt mà của Cáp Mạng đều nhờ đây cả.
+
+### 2. Vùng Kẹp Chả Thời Gian Thực (`main.dart` -> `_processLiveBuffer()`)
+
+Ống truyền trả về `List<int>`, Flutter sẽ tự chia (Normalize) qua $32768.0$ để biến nó thành dải `-1.0 -> 1.0` siêu nhẹ và dồn vào `_audioBuffer`.
+
+_Khống chế dòng lũ:_
+
+```dart
+while (_audioBuffer.length >= _frameSize) { ... }
+```
+
+Nếu Ống Buffer dài hơn kích thước Khung `800 mẫu (100ms)`, máy sẽ dùng Lưỡi dao `.sublist(0, 800)` cắt phăng khối đầu tiên mang đi Dịch mã Goertzel. Lấy xong lại vứt cái mảng thừa để vòng `while` liên tục bào mỏng đi mảng khổng lồ đến khi sạch bách âm thanh thừa.
+
+_Tìm Số và Xây Cột Đèn (`_pianoRollHistory.add`):_
+Kết quả từ thuật toán ra 8 cường độ âm tương ứng 8 dải (VD: 697Hz = 3.0, 1633Hz = 450,000.0). Nó sẽ in ra số DTMF. Đồng thời đẩy toàn bộ 8 cường độ vào Mảng Cuốn `_pianoRollHistory`.
+
+**Auto-Scroll:**
+Nhờ có `_scrollController.jumpTo(maxScrollExtent)`. Hệ điều hành sẽ tự bắn con mắt của ống kính cuộn biểu đồ Piano Roll chọt trượt dài vô hạn về bên Gốc Phải tương đương với nhịp 60 FPS mà không gặp bất kỳ hiện trạng Tràn RAM màn hình nào.
+
+### 3. Kiến Trúc Lõi Đồ Hoạ DSP (`piano_roll_painter.dart`)
+
+**Thuật toán DUAL AUTO-GAIN: Xóa Khử Nhiễu Của Mobile**
+Micro Điện thoại luôn bắt sóng High cực To và bắt phổ Low cực Bé (Vênh nhau 10-100 Lần năng lượng). Màn hình sẽ ko thể vẽ cùng điểm chói sáng 1.0 chung.
+
+```dart
+double maxLowEnergy = 500.0;
+double maxHighEnergy = 500.0;
+// Quét tìm Max độc lập...
+```
+
+Tìm Max của dải Low, và Max Của Dải High. Áp dụng Mức Max lên làm chóp Phân Mã:
+
+```dart
+double currentMaxE = (row < 4) ? maxLowEnergy : maxHighEnergy;
+double intensity = energy / currentMaxE;
+if (intensity < 0.20) continue;
+// Đủ Ngưỡng 20% => Trả Xanh Sáng Tuyệt Đối (Row HIGH) Hoặc Vàng Tuyệt Đối (ROW LOW).
+```
+
+Nhờ Thuật toán tách Lõi Bù Trừ Kép này, Bất kể đưa tần số dtmf bé cỡ nào vào Micro, Mobile App luôn hiển thị Cột Vuông ON/OFF nguyên khối Vàng Đậm/Xanh Đậm (Solid Color) chuẩn xác theo tỷ lệ toán học, tạo thành một khung Ma trận DTMF.
