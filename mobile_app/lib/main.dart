@@ -1,9 +1,11 @@
 import 'dart:io';
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:just_audio/just_audio.dart';
 import 'dtmf_encoder.dart';
 import 'audio_input.dart';
 import 'dtmf_decoder.dart';
+import 'widgets/piano_roll_painter.dart';
 
 void main() {
   runApp(const DtmfApp());
@@ -40,8 +42,23 @@ class _DtmfPageState extends State<DtmfPage> {
   // Biến lưu trữ văn bản giải mã
   String _decodeResult = 'Chưa Thu Âm';
 
+  // --- TRẠNG THÁI LIVE STREAM ---
+  bool _isRecording = false;
+  StreamSubscription<List<int>>? _audioSub;
+  final List<double> _audioBuffer = [];
+  final int _sampleRate = 8000;
+  final int _frameSize = 800; // 100ms: Tăng từ 40ms lên 100ms để Năng lượng Goertzel cực đại như lúc code cũ (chống hụt năng lượng theo hàm N^2)
+  final List<List<double>> _pianoRollHistory = [];
+  String? _lastChar;
+  int _chunkCounter = 0;
+  
+  // Trục trượt màn hình hiển thị toàn cảnh biểu đồ
+  final ScrollController _scrollController = ScrollController();
+
   @override
   void dispose() {
+    _audioSub?.cancel();
+    _scrollController.dispose();
     _controller.dispose();
     _player.dispose(); 
     super.dispose();
@@ -83,60 +100,109 @@ class _DtmfPageState extends State<DtmfPage> {
     }
   }
 
-  /// Nút Microphone (Decode)
-  Future<void> _recordAndDecodeTone() async {
+  /// Nút Microphone (Live Stream Decode)
+  Future<void> _toggleRecord() async {
+    if (_isRecording) {
+      await _stopRecording();
+    } else {
+      await _startRecording();
+    }
+  }
+
+  Future<void> _startRecording() async {
     try {
+      final stream = await AudioInput.startRecordStream(sampleRate: _sampleRate);
       setState(() {
-        _statusMessage = 'Đang mở luồng Microphone thu âm 5s...';
-        _decodeResult = 'Đang lắng nghe...';
+        _isRecording = true;
+        _decodeResult = '';
+        _pianoRollHistory.clear();
+        _audioBuffer.clear();
+        _lastChar = null;
+        _chunkCounter = 0;
+        _statusMessage = 'Đang kích hoạt vòi lấy mẫu Mic...';
       });
 
-      // 1. Khởi tạo ghi âm từ audio_input.dart (Lấy mảng PCM 16-bit)
-      final pcm = await AudioInput.recordPcmSamples(
-        sampleRate: 8000, 
-        duration: const Duration(seconds: 5)
-      );
-
-      if (pcm.isEmpty) {
-        setState(() => _statusMessage = 'Lỗi: Thiết bị mic không trả về âm thanh!');
-        return;
-      }
-
-      setState(() => _statusMessage = 'Đang chuẩn hóa biên độ mảng PCM...');
-
-      // 2. Chuyển List<int> PCM 16-bit sang List<double> chuẩn hóa [-1.0..1.0]
-      // Đã gỡ bỏ Auto-Gain vì mạch khuếch đại tự động sẽ hóa âm thanh quạt gió/im lặng 
-      // thành sóng 1.0 cực đại gây ra False Positives (lỗi nhảy số ngẫu nhiên).
-      // Việc chia đúng tỷ lệ thực 32768.0 kết hợp với threshold siêu thấp (100.0) là hoàn hảo nhất.
-      final List<double> signal = pcm.map((val) => val / 32768.0).toList();
-
-      setState(() => _statusMessage = 'Đang đưa vào Goertzel để phát hiện mã DTMF...');
-
-      // 3. Phép gọi thuật toán giải mã 
-      // Setup Threshold Threshold cực chuẩn: 100.0 (Bắt được sóng âm siêu bé từ Mic thực tế)
-      final digits = DtmfDecoder.decodeDtmfSignal(signal, sampleRate: 8000, energyThreshold: 100.0);
-
-      setState(() {
-        _statusMessage = 'Hoàn tất! Cấu trúc xử lý thành công gốc ${pcm.length} mẫu.';
-        if (digits.isEmpty) {
-          _decodeResult = '[Dải Tĩnh / Không Phát Hiện Ký Tự]';
-        } else {
-          _decodeResult = digits;
+      _audioSub = stream.listen((List<int> chunk) {
+        try {
+          // Bơm thẳng dữ liệu vào bộ óc xử lý
+          final doubleChunk = chunk.map((c) => c / 32768.0).toList();
+          _audioBuffer.addAll(doubleChunk);
+          _processLiveBuffer();
+        } catch(e) {
+          if (mounted) setState(() => _statusMessage = 'Lỗi Map Data: $e');
         }
+      }, onError: (err) {
+        if (mounted) setState(() => _statusMessage = 'Lỗi Mic Rớt Luồng: $err');
       });
-
+      
     } catch (e) {
-      // 4. Try/catch với các trường hợp cấp phép giấy phép từ chối mic
       setState(() {
-        final errText = e.toString().toLowerCase();
-        if (errText.contains('permission') || errText.contains('quyền') || errText.contains('từ chối')) {
-          _statusMessage = 'CẢNH BÁO: App bị từ chối quyền hoặc chưa cấp quyền thu âm Microphone trên cài đặt máy!';
-        } else {
-          _statusMessage = 'LỖI HỆ THỐNG AUDIO: $e';
-        }
-        _decodeResult = '⚠ Lỗi';
+        _statusMessage = 'LỖI PHẦN CỨNG BẬT MIC: $e';
+        _isRecording = false;
       });
     }
+  }
+
+  void _processLiveBuffer() {
+    bool hasNewFrame = false;
+    final allFreqs = [...DtmfDecoder.rowFreqs, ...DtmfDecoder.colFreqs];
+    double tempDebugMaxEnergy = 0.0;
+
+    // Cắt mảng âm thanh trôi chảy thành các khối vuông cố định (_frameSize)
+    while (_audioBuffer.length >= _frameSize) {
+      final frame = _audioBuffer.sublist(0, _frameSize);
+      _audioBuffer.removeRange(0, _frameSize);
+      
+      List<double> frameEnergies = [];
+      _chunkCounter++;
+      
+      // Tính Toán Phổ Goertzel
+      final energies = DtmfDecoder.energiesForFreqs(frame, _sampleRate, allFreqs);
+      for (var f in allFreqs) {
+        double e = energies[f] ?? 0.0;
+        frameEnergies.add(e);
+        if (e > tempDebugMaxEnergy) tempDebugMaxEnergy = e;
+      }
+      
+      // Ngưỡng 100.0 cực kỳ nhạy giống hệ thống Tĩnh 5s cũ. Khoá cổng tiếng gió.
+      final char = DtmfDecoder.detectDigitFromFrame(frame, _sampleRate, 100.0);
+      if (char != null) {
+        if (char != _lastChar) {
+          _decodeResult += char;
+          _lastChar = char;
+        }
+      } else {
+        _lastChar = null;
+      }
+      
+      _pianoRollHistory.add(frameEnergies);
+      
+      // XOÁ BỎ: Hủy giới hạn độ dài History. Khách hàng giờ được xem lại toàn cảnh không bị xóa
+      hasNewFrame = true;
+    }
+    
+    if (hasNewFrame && mounted) {
+      setState(() {
+         // Cập nhật dòng trạng thái để User biết Mic có đang thực sự chạy và in ra Energy gốc
+         _statusMessage = 'LIVE [Block $_chunkCounter]: Đỉnh sóng ${tempDebugMaxEnergy.toStringAsFixed(1)}';
+      });
+      
+      // Auto-Scroll: Đẩy tự động biểu đồ giật theo thời gian thực về Phải ngoài cùng
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (_scrollController.hasClients) {
+          _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
+        }
+      });
+    }
+  }
+
+  Future<void> _stopRecording() async {
+     await _audioSub?.cancel();
+     await AudioInput.stopRecordStream();
+     setState(() {
+       _isRecording = false;
+       _statusMessage = 'Trạng thái: Đã dừng thu âm an toàn.';
+     });
   }
 
   @override
@@ -175,21 +241,81 @@ class _DtmfPageState extends State<DtmfPage> {
             
             const SizedBox(height: 40),
             const Divider(),
-            const SizedBox(height: 20),
+            const SizedBox(height: 15),
 
-            // Nút Ghi Âm (Giao diện 2)
+            // Nút Ghi Âm LIVE STREAM
             ElevatedButton.icon(
-              onPressed: _recordAndDecodeTone,
-              icon: const Icon(Icons.mic_rounded),
-              label: const Text('Quy Trình 2: Record (5s) & Decode'),
+              onPressed: _toggleRecord,
+              icon: Icon(_isRecording ? Icons.stop_circle : Icons.mic_rounded),
+              label: Text(_isRecording ? '[LIVE] Dừng Ngay & Chốt Kết Quả' : 'Bắt Đầu Record LiveStream'),
               style: ElevatedButton.styleFrom(
                 minimumSize: const Size.fromHeight(55),
-                backgroundColor: Colors.teal.shade100,
+                backgroundColor: _isRecording ? Colors.red.shade400 : Colors.teal.shade400,
+                foregroundColor: Colors.white,
                 textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
               ),
             ),
 
-            const SizedBox(height: 20),
+            const SizedBox(height: 15),
+            
+            // Khu vực trình chiếu Lưới Gạch Radar 8 Làn (Piano Roll) có Khả Năng Vuốt Kéo và Trục Y Tĩnh
+            Container(
+              height: 180, 
+              width: double.infinity,
+              decoration: BoxDecoration(
+                color: Colors.black,
+                border: Border.all(color: Colors.white, width: 2),
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Row(
+                children: [
+                  // Cột Label Trục Y Cố Định (Fixed Y-Axis)
+                  Container(
+                    width: 45,
+                    decoration: BoxDecoration(
+                      color: Colors.grey.shade900,
+                      border: Border(right: BorderSide(color: Colors.white54, width: 1))
+                    ),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.spaceAround,
+                      children: const [
+                        Text('1633', style: TextStyle(color: Colors.lightGreenAccent, fontSize: 11, fontWeight: FontWeight.bold)),
+                        Text('1477', style: TextStyle(color: Colors.lightGreenAccent, fontSize: 11, fontWeight: FontWeight.bold)),
+                        Text('1336', style: TextStyle(color: Colors.lightGreenAccent, fontSize: 11, fontWeight: FontWeight.bold)),
+                        Text('1209', style: TextStyle(color: Colors.lightGreenAccent, fontSize: 11, fontWeight: FontWeight.bold)),
+                        Text('941', style: TextStyle(color: Colors.limeAccent, fontSize: 11, fontWeight: FontWeight.bold)),
+                        Text('852', style: TextStyle(color: Colors.limeAccent, fontSize: 11, fontWeight: FontWeight.bold)),
+                        Text('770', style: TextStyle(color: Colors.limeAccent, fontSize: 11, fontWeight: FontWeight.bold)),
+                        Text('697', style: TextStyle(color: Colors.limeAccent, fontSize: 11, fontWeight: FontWeight.bold)),
+                      ]
+                    )
+                  ),
+                  // Phần Cuộn Lưới Nhiệt
+                  Expanded(
+                    child: ClipRRect(
+                      borderRadius: const BorderRadius.only(topRight: Radius.circular(2), bottomRight: Radius.circular(2)),
+                      child: SingleChildScrollView(
+                        controller: _scrollController,
+                        scrollDirection: Axis.horizontal,
+                        child: CustomPaint(
+                          // Thiết lập Width dài vô hạn: Lấy số lượng cột x 15 Pixels chiều ngang mỗi viên
+                          // Trừ đi 45px do vướng cột Y-axis
+                          size: Size(
+                            _pianoRollHistory.length * 15.0 > (MediaQuery.of(context).size.width - 45 - 48) 
+                              ? _pianoRollHistory.length * 15.0 
+                              : (MediaQuery.of(context).size.width - 45 - 48),
+                            180
+                          ),
+                          painter: PianoRollPainter(_pianoRollHistory),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            
+            const SizedBox(height: 15),
 
             // Hộp chứa bảng Decoded Text Result rất to và rõ ràng
             Container(
