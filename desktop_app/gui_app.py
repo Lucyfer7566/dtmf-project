@@ -57,7 +57,7 @@ class DTMFApp:
         self.entry_digits.insert(0, "A89")
         self.entry_digits.pack(pady=5)
         
-        self.btn_encode = tk.Button(frame_encode, text="Mạo danh Âm (Encode) & Phát Loa", command=self.on_encode_play, bg="#4CAF50", fg="white", height=2)
+        self.btn_encode = tk.Button(frame_encode, text="Mã hóa & Phát âm thanh", command=self.on_encode_play, bg="#4CAF50", fg="white", height=2)
         self.btn_encode.pack(fill="x", pady=2)
 
         # ---- DECODER BOX ----
