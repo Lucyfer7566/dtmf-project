@@ -10,7 +10,7 @@ Dự án hỗ trợ 2 nền tảng ứng dụng:
 
 ---
 
-## 💻 1. HƯỚNG DẪN CÀI ĐẶT BẢN MÁY TÍNH (PYTHON DESKTOP)
+## 1. HƯỚNG DẪN CÀI ĐẶT BẢN MÁY TÍNH (PYTHON DESKTOP)
 
 Phiên bản Desktop được thiết kế với giao diện Bảng Điều Khiển với các lưới phổ Waveform và Heatmap phân tích chi tiết mọi tầng rung động.
 
